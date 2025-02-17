@@ -24,6 +24,7 @@ void* serviceClient(void* pargs) {
     struct threadArgs* args = (struct threadArgs*)pargs;
     struct header header;
     int clientsockfd = args->clientsockfd;
+    free(args);
     recv(clientsockfd, &header, sizeof(struct header), 0);
     header.length = ntohl(header.length);
     header.magicNumber = ntohl(header.magicNumber);
@@ -86,12 +87,12 @@ int main(int argc, char** argv) {
     while (1) {
         struct sockaddr_storage their_addr;
         socklen_t len = sizeof(their_addr);
-        struct threadArgs args;
-        args.clientsockfd = accept(sockfd, (struct sockaddr*)&their_addr, &len);
+        struct threadArgs* args = (struct threadArgs*)malloc(sizeof(struct threadArgs));
+        args->clientsockfd = accept(sockfd, (struct sockaddr*)&their_addr, &len);
         pthread_t thread;
         printf("Got a connection!  Servicing now...\n");
         fflush(stdout);
-        int res = pthread_create(&thread, NULL, serviceClient, (void*)&args);
+        int res = pthread_create(&thread, NULL, serviceClient, (void*)args);
         if (res == -1) {
             fprintf(stderr, "Error %i creating thread", errno);
             exit(errno);

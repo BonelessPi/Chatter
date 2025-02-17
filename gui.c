@@ -139,6 +139,8 @@ void typeLoop(struct Chatter* chatter) {
         int ch = 0;
         do {
             ch = wgetch(gui->inputWindow);
+            reprintChatWindow(chatter);
+            reprintUsernameWindow(chatter);
             if (ch == KEY_UP) {
                 // TODO: Scroll up in current conversation
             }
