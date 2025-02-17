@@ -10,9 +10,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <netinet/tcp.h>
 #include <time.h>
-#include <sys/stat.h>
 
 #include "linkedlist.h"
 #include "hashmap.h"
@@ -20,7 +18,6 @@
 #include "chatter.h"
 
 #define BACKLOG 20
-#define ANNOUNCE_SENDING_FILE 1
 
 ///////////////////////////////////////////////////////////
 //       Data Structure Memory Management
@@ -32,7 +29,6 @@ struct ReceiveData {
 };
 
 struct Chat* initChat(int sockfd) {
-    debug_print("initChat called\n");
     struct Chat* chat = (struct Chat*)malloc(sizeof(struct Chat));
     chat->messagesIn = LinkedList_init();
     chat->messagesOut = LinkedList_init();
@@ -42,7 +38,6 @@ struct Chat* initChat(int sockfd) {
 }
 
 void destroyChat(struct Chat* chat) {
-    debug_print("destroyChat called\n");
     freeMessages(chat->messagesIn);
     LinkedList_free(chat->messagesIn);
     freeMessages(chat->messagesOut);
@@ -51,7 +46,6 @@ void destroyChat(struct Chat* chat) {
 }
 
 void freeMessages(struct LinkedList* messages) {
-    debug_print("freeMessages called\n");
     struct LinkedNode* node = messages->head;
     while (node != NULL) {
         struct Message* message = (struct Message*)node->data;
@@ -62,7 +56,6 @@ void freeMessages(struct LinkedList* messages) {
 }
 
 struct Chatter* initChatter() {
-    debug_print("initChatter called\n");
     // Dynamically allocate all objects that need allocating
     struct Chatter* chatter = (struct Chatter*)malloc(sizeof(struct Chatter));
     chatter->gui = initGUI();
@@ -70,19 +63,10 @@ struct Chatter* initChatter() {
     chatter->chats = LinkedList_init();
     chatter->visibleChat = NULL;
     pthread_mutex_init(&chatter->lock, NULL);
-    /////////////////////////////////////////
-    // Refresh the GUI thread every so often
-    int res = pthread_create(&chatter->refreshGUIThread, NULL, refreshGUILoop, (void*)chatter);
-    if (res != 0) {
-        fprintf(stderr, "Error setting up refresh daemon for GUI\n");
-    }
-    /////////////////////////////////////////
     return chatter;
 }
 
 void destroyChatter(struct Chatter* chatter) {
-    debug_print("destroyChatter called\n");
-
     destroyGUI(chatter->gui);
     struct LinkedNode* chatNode = chatter->chats->head;
     while (chatNode != NULL) {
@@ -105,11 +89,8 @@ void destroyChatter(struct Chatter* chatter) {
  * @return struct Chat* 
  */
 struct Chat* getChatFromName(struct Chatter* chatter, char* name) {
-    debug_print("getChatFromName called\n");
-
     struct Chat* chat = NULL;
     pthread_mutex_lock(&chatter->lock);
-
     struct LinkedNode* node = chatter->chats->head;
     int len = strlen(name);
     while (node != NULL) {
@@ -120,45 +101,8 @@ struct Chat* getChatFromName(struct Chatter* chatter, char* name) {
         }
         node = node->next;
     }
-
     pthread_mutex_unlock(&chatter->lock);
     return chat;
-}
-
-int _send_loop(int sockfd,char *src,size_t len){
-    int status = STATUS_SUCCESS;
-    ssize_t sent_bytes;
-
-    while (len > 0){
-        sent_bytes = send(sockfd,src,len,0);
-        if(sent_bytes == -1){
-            status = FAILURE_GENERIC;
-            break;
-        }
-        src += sent_bytes;
-        len -= sent_bytes;
-    }
-
-    return status;
-}
-
-int _recv_loop(int sockfd,char *dst,size_t len){
-    int status = STATUS_SUCCESS;
-    ssize_t res;
-
-    while(len > 0){
-        res = recv(sockfd,dst,len,0);
-        if (res <= 0) {
-            perror("recv");
-            debug_print("res: %ld\n",res);
-            status = FAILURE_GENERIC;
-            break;
-        }
-        dst += res;
-        len -= res;
-    }
-
-    return status;
 }
 
 /**
@@ -169,7 +113,6 @@ int _recv_loop(int sockfd,char *dst,size_t len){
  */
 void removeChat(struct Chatter* chatter, struct Chat* chat) {
     pthread_mutex_lock(&chatter->lock);
-    debug_print("REMOVE CHAT WAS CALLED!!!!\n");
     LinkedList_remove(chatter->chats, chat);
     if (chatter->visibleChat == chat) {
         // Bounce to another chat if there is one
@@ -198,118 +141,25 @@ void* receiveLoop(void* pargs) {
     struct Chat* chat = param->chat;
     struct Chatter* chatter = param->chatter;
     free(param);
-
-    int continue_server_loop = 1, status = STATUS_SUCCESS, res;
-    char *msg_text, *filename, buf[1024];
-    struct Message *msg_obj;
-    uint16_t incoming_short;
-    uint32_t incoming_long;
-    size_t bytes_written;
-    FILE *file;
-
-    while(continue_server_loop){
+    while (1) {
         // Loop until the connection closes
-        struct header_generic msg_header;
-        
-        status = _recv_loop(chat->sockfd,(char*)&msg_header,sizeof(struct header_generic));
-        if (status != STATUS_SUCCESS) {
-            debug_print("RECV FAILURE!!\n");
+        struct header_generic header;
+        int res = recv(chat->sockfd, &header, sizeof(struct header_generic), 0);
+        if (res <= 0) {
             break;
         }
-
+        // TODO: Fill this in.  Cast the header as appropriate, and receive
+        // the rest of the data.  
         // Be sure to lock variables as appropriate for thread safety
-        switch(msg_header.magic){
-            case INDICATE_NAME:
-                debug_print("NAME recvd\n");
-
-                incoming_short = ntohs(msg_header.shortInt);
-
-                status = _recv_loop(chat->sockfd,chat->name,incoming_short);
-                chat->name[incoming_short] = '\0';
-
-                if(status != STATUS_SUCCESS){
-                    continue_server_loop = 0;
-                }
-                break;
-
-            case SEND_MESSAGE:
-                debug_print("MESSAGE recvd\n");
-
-                msg_obj = malloc(sizeof(struct Message));
-                incoming_short = ntohs(msg_header.shortInt);
-                incoming_long = ntohl(msg_header.longInt);
-                msg_text = malloc((uint64_t)incoming_long+1);
-
-                status = _recv_loop(chat->sockfd,msg_text,incoming_long);
-                msg_text[incoming_long] = '\0';
-                if(status != STATUS_SUCCESS){
-                    continue_server_loop = 0;
-                }
-
-                msg_obj->id = incoming_short;
-                msg_obj->timestamp = time(NULL);
-                msg_obj->text = msg_text;
-                LinkedList_addFirst(chat->messagesIn,msg_obj);
-                break;
-
-            case DELETE_MESSAGE:
-                debug_print("DELETE NAME recvd\n");
-                
-                incoming_short = ntohs(msg_header.shortInt);
-                deleteMessageFromChat(chat,incoming_short);
-                break;
-
-            case SEND_FILE:
-                debug_print("FILE recvd\n");
-
-                incoming_short = ntohs(msg_header.shortInt);
-                incoming_long = ntohs(msg_header.shortInt);
-                filename = malloc((uint32_t)incoming_short+1);
-
-                status = _recv_loop(chat->sockfd,filename,incoming_short);
-                filename[incoming_short] = '\0';
-                if(status != STATUS_SUCCESS){
-                    continue_server_loop = 0;
-                }
-
-                file = fopen(filename,"rb");
-                free(filename);
-                if(file == NULL){
-                    continue_server_loop = 0;
-                }
-                else{
-                    while(incoming_long > 0){
-                        res = recv(chat->sockfd,buf,incoming_long<1024 ? incoming_long : 1024,0);
-                        if (res <= 0) {
-                            continue_server_loop = 0;
-                            break;
-                        }
-                        bytes_written = fwrite(buf,sizeof(char),res,file);
-                        if (bytes_written < res) {
-                            continue_server_loop = 0;
-                            break;
-                        }
-                        incoming_long -= res;
-                    }
-                    fclose(file);
-                }
-
-                break;
-
-            case END_CHAT:
-                debug_print("END CHAT recvd\n");
-
-                removeChat(chatter,chat);
-                break;
-
-            default:
-                debug_print("Unknown magic number %d received",msg_header.magic);
-                break;
+        if (header.magic == INDICATE_NAME) {
+            // So on and so forth...
+            uint16_t len = ntohs(header.shortInt);
+            int res = recv(chat->sockfd, chat->name, len, 0);
+            // TODO: Error checking
         }
         reprintUsernameWindow(chatter);
         reprintChatWindow(chatter);
     }
-    debug_print("ENDING RECEIVE LOOP!\n");
     removeChat(chatter, chat);
     pthread_exit(NULL); // Clean up thread
     return NULL;
@@ -329,36 +179,24 @@ void* receiveLoop(void* pargs) {
  * @param message 
  */
 int sendMessage(struct Chatter* chatter, char* message) {
-    int status = STATUS_SUCCESS;
+    // We're about to touch variables that are shared between
+    // threads
     pthread_mutex_lock(&chatter->lock);
-    
-    if (chatter->visibleChat == NULL){
+    int status = STATUS_SUCCESS;
+    if (chatter->visibleChat == NULL ){
         status = FAILURE_GENERIC;
     }
-    else{
-        // Handle adding the message locally
-        struct Message *msg_obj = malloc(sizeof(struct Message));
-        uint16_t msg_id = chatter->visibleChat->outCounter++;
-        uint32_t remaining_len = strlen(message);
-        char *msg_text = malloc((uint64_t)remaining_len+1);
-        strcpy(msg_text,message);
-        msg_obj->id = msg_id;
-        msg_obj->timestamp = time(NULL);
-        msg_obj->text = msg_text;
-        LinkedList_addFirst(chatter->visibleChat->messagesOut,msg_obj);
+    else {
+        // TODO: Fill this in
+        // Step 1: Make a copy of message string (remember to free later)
+        // Step 2: Dynamically allocate Message struct with ID and timestamp
+        // Step 3: Send an appropriate segment over the socket
 
-        // Handle sending message
-        struct header_generic msg_header;
-        msg_header.magic = SEND_MESSAGE;
-        msg_header.shortInt = htons(msg_id);
-        msg_header.longInt = htonl(remaining_len);
-        
-        status = _send_loop(chatter->visibleChat->sockfd,(char*)&msg_header,sizeof(struct header_generic));
-        if(status == STATUS_SUCCESS){
-            status = _send_loop(chatter->visibleChat->sockfd,message,remaining_len);
-        }
+        chatter->visibleChat->outCounter++;
     }
-    
+
+
+
     pthread_mutex_unlock(&chatter->lock);
     return status;
 }
@@ -370,35 +208,9 @@ int sendMessage(struct Chatter* chatter, char* message) {
  * @param id ID of message to delete
  */
 int deleteMessage(struct Chatter* chatter, uint16_t id) {
-    pthread_mutex_lock(&chatter->lock);
+    int status = STATUS_SUCCESS;
+    // TODO: Fill this in
 
-    // Locally remove the message
-    int status = deleteMessageFromChat(chatter->visibleChat,id);
-
-    // Send to remove the message on the remote connection
-    struct header_generic msg_header;
-    msg_header.magic = DELETE_MESSAGE;
-    msg_header.shortInt = htons(id);
-
-    status = _send_loop(chatter->visibleChat->sockfd,(char*)&msg_header,sizeof(struct header_generic));
-
-    pthread_mutex_unlock(&chatter->lock);
-    return status;
-}
-
-int deleteMessageFromChat(struct Chat *chat, uint16_t id){
-    int status = FAILURE_GENERIC;
-    struct LinkedList *messagesOut = chat->messagesOut;
-    for(struct LinkedNode *node = messagesOut->head; node != NULL; node=node->next){
-        struct Message *message = (struct Message*)node->data;
-        if(message->id == id){
-            free(message->text);
-            LinkedList_remove(messagesOut,message);
-            free(message);
-            status = STATUS_SUCCESS;
-            break;
-        }
-    }
     return status;
 }
 
@@ -410,65 +222,8 @@ int deleteMessageFromChat(struct Chat *chat, uint16_t id){
  */
 int sendFile(struct Chatter* chatter, char* filename) {
     int status = STATUS_SUCCESS;
-    if(ANNOUNCE_SENDING_FILE){
-        char *announce_msg = malloc(strlen(filename)+1+17);
-        sprintf(announce_msg,"(Sending file '%s')",filename);
-        sendMessage(chatter,announce_msg);
-        free(announce_msg);
-    }
-    pthread_mutex_lock(&chatter->lock);
+    // TODO: Fill this in
 
-    struct stat file_stat;
-    if(stat(filename,&file_stat) == -1){
-        status = FAILURE_GENERIC;
-    }
-    else{
-        uint16_t remaining_fn_length = strlen(filename);
-        uint32_t remaining_file_length = file_stat.st_size;
-        struct header_generic msg_header;
-        msg_header.magic = SEND_FILE;
-        msg_header.shortInt = htons(remaining_fn_length);
-        msg_header.longInt = htonl(remaining_file_length);
-
-        FILE *file = fopen(filename,"rb");
-        if(file == NULL){
-            status = FAILURE_GENERIC;
-        }
-        else{
-            status = _send_loop(chatter->visibleChat->sockfd,(char*)&msg_header,sizeof(struct header_generic));
-            if(status == STATUS_SUCCESS){
-                ssize_t sent_bytes;
-                size_t remaining_in_buffer = 0;
-
-                status = _send_loop(chatter->visibleChat->sockfd,filename,remaining_fn_length);
-
-                char buf[1024];
-                while(remaining_file_length > 0){
-                    if(remaining_in_buffer == 0){
-                        remaining_in_buffer = fread(buf,sizeof(char),1024,file);
-                        if(remaining_in_buffer < 1024 && ferror(file)){
-                            status = FAILURE_GENERIC;
-                            break;
-                        }
-                    }
-                    sent_bytes = send(chatter->visibleChat->sockfd,buf,remaining_in_buffer,0);
-                    if(sent_bytes == -1){
-                        status = FAILURE_GENERIC;
-                        break;
-                    }
-                    remaining_in_buffer -= sent_bytes;
-                    remaining_file_length -= sent_bytes;
-                    if(remaining_in_buffer > 0){
-                        memmove(buf,buf+sent_bytes,remaining_in_buffer);
-                    }
-                }
-            }
-            
-            fclose(file);
-        }
-    }
-
-    pthread_mutex_unlock(&chatter->lock);
     return status;
 }
 
@@ -481,40 +236,27 @@ int sendFile(struct Chatter* chatter, char* filename) {
 int broadcastMyName(struct Chatter* chatter) {
     int status = STATUS_SUCCESS;
     pthread_mutex_lock(&chatter->lock);
-
-    debug_print("Hello from broadcast myname!\n");
-    debug_print("Broadcast name, chatter*: %p\n",(void*)chatter);
-    
-    size_t remaining_len = strlen(chatter->myname);
-    struct header_generic msg_header;
-    msg_header.magic = INDICATE_NAME;
-    msg_header.shortInt = htons((uint16_t)remaining_len);
-
-    debug_print("Hello from after header creation!\n");
-
-    for(struct LinkedNode *curr_node = chatter->chats->head; curr_node != NULL; curr_node = curr_node->next){
-        debug_print("Hello from inside the loop!\n");
-        struct Chat *curr_chat = (struct Chat*)curr_node->data;
-        if(send(curr_chat->sockfd,(char*)&msg_header,sizeof(struct header_generic),0) == -1){
+    struct LinkedNode* node = chatter->chats->head;
+    struct header_generic header;
+    header.magic = INDICATE_NAME;
+    uint16_t len = strlen(chatter->myname);
+    header.shortInt = htons(len);
+    while (node != NULL) {
+        struct Chat* thisChat = (struct Chat*)node->data;
+        int ret = send(thisChat->sockfd, &header, sizeof(struct header_generic), 0);
+        if (ret == -1) {
             status = FAILURE_GENERIC;
+            break;
         }
-        else{
-            char *message = chatter->myname;
-            ssize_t sent_bytes;
-            while (remaining_len > 0){
-                sent_bytes = send(curr_chat->sockfd,message,remaining_len,0);
-                if(sent_bytes == -1){
-                    status = FAILURE_GENERIC;
-                    break;
-                }
-                message += sent_bytes;
-                remaining_len -= sent_bytes;
-            }
+        ret = send(thisChat->sockfd, chatter->myname, len, 0);
+        node = node->next;
+        if (ret == -1) {
+            status = FAILURE_GENERIC;
+            break;
         }
     }
-
     pthread_mutex_unlock(&chatter->lock);
-    debug_print("Hello from after the unlock!\n");
+    fprintf(stderr, "Finished broadcastMyName: status code %i\n", status);
     return status;
 }
 
@@ -525,19 +267,8 @@ int broadcastMyName(struct Chatter* chatter) {
  * @param name Close connection with this person
  */
 int closeChat(struct Chatter* chatter, char* name) {
-    debug_print("closeChat called\n");
-
     int status = STATUS_SUCCESS;
-    
-    struct Chat *selected_chat = getChatFromName(chatter,name);
-
-    struct header_generic msg_header;
-    msg_header.magic = END_CHAT;
-
-    if(send(selected_chat->sockfd,(char*)&msg_header,sizeof(struct header_generic),0) == -1){
-        status = FAILURE_GENERIC;
-    }
-    removeChat(chatter,selected_chat);
+    // TODO: Fill this in
 
     return status;
 }
@@ -562,6 +293,7 @@ int switchTo(struct Chatter* chatter, char* name) {
     pthread_mutex_unlock(&chatter->lock);
     return status;
 }
+
 
 
 
@@ -594,16 +326,11 @@ void socketErrorAndExit(struct Chatter* chatter, char* fmt) {
  * @param sockfd A socket that's already been connected to a stream
  */
 int setupNewChat(struct Chatter* chatter, int sockfd) {
-    // Step 0: Disable Nagle's algorithm on this socket
-    int yes = 1;
-    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(int));
     // Step 1: Setup a new chat object and add to the list
     struct Chat* chat = initChat(sockfd);
     strcpy(chat->name, "Anonymous");
     pthread_mutex_lock(&chatter->lock);
     LinkedList_addFirst(chatter->chats, (void*)chat);
-    debug_print("In setup new chat, chat list head: %p\n",(void*)chatter->chats->head);
-    debug_print("In setup new chat, sockfd: %d\n",sockfd);
     // Step 2: Start a thread for a loop that receives data
     struct ReceiveData* param = (struct ReceiveData*)malloc(sizeof(struct ReceiveData));
     param->chat = chat;
@@ -628,13 +355,11 @@ int setupNewChat(struct Chatter* chatter, int sockfd) {
     }
     pthread_mutex_unlock(&chatter->lock);
     if (status != STATUS_SUCCESS) {
-        debug_print("ISSUE OCCURRED IN SETUP, DESTROYING CHAT!!");
         destroyChat(chat);
     }
-    debug_print("Setup new chat about to return, chat list head: %p\n",(void*)chatter->chats->head);
-    debug_print("Setup new chat, chatter*: %p\n",(void*)chatter);
     return status;
 }
+
 
 
 /**
@@ -677,15 +402,16 @@ int connectChat(struct Chatter* chatter, char* IP, char* port) {
         return ERR_OPENSOCKET;
     }
     // Step 2: Setup stream on socket and connect
+    struct timeval timeout;
+    timeout.tv_usec = 5;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     ret = connect(sockfd, node->ai_addr, node->ai_addrlen);
     freeaddrinfo(node);
     if (ret == -1) {
         printErrorGUI(chatter->gui, "Error opening socket");
         return ERR_OPENSOCKET;
     }
-    ret = setupNewChat(chatter, sockfd);
-    debug_print("in connectChat before return... chats*: %p, chats head: %p\n",(void*)chatter->chats,(void*)chatter->chats->head);
-    return ret;
+    return setupNewChat(chatter, sockfd);
 }
 
 /**

@@ -7,6 +7,10 @@
 #include "linkedlist.h"
 #include "hashmap.h"
 
+#define DEBUG 1
+#define debug_print(fmt, ...) \
+            do { if (DEBUG) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
+
 enum ChatStatusCodes {
     STATUS_SUCCESS = 0,
     FAILURE_GENERIC = 1,
@@ -47,7 +51,6 @@ struct GUI* initGUI();
 void destroyGUI(struct GUI* gui);
 void printErrorGUI(struct GUI* gui, char* error);
 
-
 struct Message {
     uint16_t id;
     time_t timestamp; // Time at which this message was added to the data structure
@@ -58,7 +61,7 @@ void freeMessages(struct LinkedList* messages);
 struct Chat {
     char name[65536]; // Name of the person we're talking to
     int sockfd; // Socket associated to this chat
-    int outCounter; // How many messages sent out on this chat
+    uint16_t outCounter; // How many messages sent out on this chat
     struct LinkedList* messagesIn;
     struct LinkedList* messagesOut;
 };
@@ -82,8 +85,6 @@ struct Chat* getChatFromName(struct Chatter* chatter, char* name);
 void reprintUsernameWindow(struct Chatter* chatter); // NOTE: This method locks chat
 void reprintChatWindow(struct Chatter* chatter); // NOTE: This method locks chat
 void typeLoop(struct Chatter* chatter);
-
-
 
 
 ////////////////////////////////////////////////////////////////////
@@ -115,6 +116,8 @@ int sendMessage(struct Chatter* chatter, char* message);
  */
 int deleteMessage(struct Chatter* chatter, uint16_t id);
 
+int deleteMessageFromChat(struct Chat *chat, uint16_t id);
+
 /**
  * @brief Send a file in the visible chat
  * 
@@ -139,7 +142,6 @@ int broadcastMyName(struct Chatter* chatter);
  */
 int closeChat(struct Chatter* chatter, char* name);
 
-
 /**
  * @brief Switch the visible chat
  * 
@@ -149,11 +151,9 @@ int closeChat(struct Chatter* chatter, char* name);
 int switchTo(struct Chatter* chatter, char* name);
 
 
-
 ////////////////////////////////////////////////////////////////////
 //                    INCOMING ACTIONS                            //
 ////////////////////////////////////////////////////////////////////
-
 
 
 #endif
