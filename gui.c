@@ -191,24 +191,24 @@ int parseInput(struct Chatter* chatter, char* input) {
         status = broadcastMyName(chatter);
     }
     else if (strncmp(input, "sendfile", strlen("sendfile")) == 0) {
-        // Send the following file message in the active conversation
+        // Send the following file message in the visible conversation
         char filename[65536];
-        sscanf(input, "sendfile %s", filename);
+        sscanf(input, "sendfile %65535s", filename);
         status = sendFile(chatter, filename);
     }
     else if (strncmp(input, "send", strlen("send")) == 0) {
-        // Send the following text message in the active conversation
+        // Send the following text message in the visible conversation
         char* message = input + strlen("send") + 1;
         status = sendMessage(chatter, message);
     }
     else if (strncmp(input, "talkto", strlen("talkto")) == 0) {
-        // Switch the active chat window to someone else
+        // Switch the visible chat window to someone else
         char name[65536];
         sscanf(input, "talkto %65535s", name);
         status = switchTo(chatter, name);
     }
     else if (strncmp(input, "delete", strlen("delete")) == 0) {
-        // Delete the message with this id in the active conversation
+        // Delete the message with this id in the visible conversation
         uint16_t id;
         sscanf(input, "delete %hu", &id);
         status = deleteMessage(chatter, id);
@@ -233,6 +233,7 @@ int parseInput(struct Chatter* chatter, char* input) {
         return finishedStatus;
     }
     if (status == STATUS_SUCCESS) {
+        debug_print("gui.c parseInput: success and repainting\n");
         reprintUsernameWindow(chatter);
         reprintChatWindow(chatter);
     }
