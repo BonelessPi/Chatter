@@ -38,8 +38,10 @@ struct GUI {
     int CH; // Chat height
     int CW; // Chat width
     WINDOW* chatWindow;
+    pthread_mutex_t chatWindowLock;
     WINDOW* inputWindow;
     WINDOW* nameWindow;
+    pthread_mutex_t nameWindowLock;
 };
 struct GUI* initGUI();
 void destroyGUI(struct GUI* gui);
@@ -62,6 +64,7 @@ struct Chat {
 };
 struct Chat* initChat(int sockfd);
 void destroyChat(struct Chat* chat);
+void* refreshGUILoop(void* args);
 
 struct Chatter {
     struct GUI* gui;
@@ -70,6 +73,7 @@ struct Chatter {
     struct Chat* visibleChat; // Linked node for the visible chat
     int serversock; // File descriptor for the socket listening for incoming connections
     pthread_mutex_t lock;
+    pthread_t refreshGUIThread;
 };
 struct Chatter* initChatter();
 void destroyChatter(struct Chatter* chatter);

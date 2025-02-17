@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <netinet/tcp.h>
 #include <time.h>
 
 #include "linkedlist.h"
@@ -63,6 +64,13 @@ struct Chatter* initChatter() {
     chatter->chats = LinkedList_init();
     chatter->visibleChat = NULL;
     pthread_mutex_init(&chatter->lock, NULL);
+    /////////////////////////////////////////
+    // Refresh the GUI thread every so often
+    int res = pthread_create(&chatter->refreshGUIThread, NULL, refreshGUILoop, (void*)chatter);
+    if (res != 0) {
+        fprintf(stderr, "Error setting up refresh daemon for GUI\n");
+    }
+    /////////////////////////////////////////
     return chatter;
 }
 
@@ -153,8 +161,11 @@ void* receiveLoop(void* pargs) {
         // Be sure to lock variables as appropriate for thread safety
         if (header.magic == INDICATE_NAME) {
             // So on and so forth...
+            uint16_t len = ntohs(header.shortInt);
+            int res = recv(chat->sockfd, chat->name, len, 0);
+            chat->name[len] = '\0';
+            // TODO: Error checking
         }
-
         reprintUsernameWindow(chatter);
         reprintChatWindow(chatter);
     }
@@ -233,8 +244,28 @@ int sendFile(struct Chatter* chatter, char* filename) {
  */
 int broadcastMyName(struct Chatter* chatter) {
     int status = STATUS_SUCCESS;
-    // TODO: Fill this in
-
+    pthread_mutex_lock(&chatter->lock);
+    struct LinkedNode* node = chatter->chats->head;
+    struct header_generic header;
+    header.magic = INDICATE_NAME;
+    uint16_t len = strlen(chatter->myname);
+    header.shortInt = htons(len);
+    while (node != NULL) {
+        struct Chat* thisChat = (struct Chat*)node->data;
+        int ret = send(thisChat->sockfd, &header, sizeof(struct header_generic), 0);
+        if (ret == -1) {
+            status = FAILURE_GENERIC;
+            break;
+        }
+        ret = send(thisChat->sockfd, chatter->myname, len, 0);
+        node = node->next;
+        if (ret == -1) {
+            status = FAILURE_GENERIC;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&chatter->lock);
+    fprintf(stderr, "Finished broadcastMyName: status code %i\n", status);
     return status;
 }
 
@@ -304,6 +335,9 @@ void socketErrorAndExit(struct Chatter* chatter, char* fmt) {
  * @param sockfd A socket that's already been connected to a stream
  */
 int setupNewChat(struct Chatter* chatter, int sockfd) {
+    // Step 0: Disable Nagle's algorithm on this socket
+    int yes = 1;
+    setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(int));
     // Step 1: Setup a new chat object and add to the list
     struct Chat* chat = initChat(sockfd);
     strcpy(chat->name, "Anonymous");
@@ -380,9 +414,6 @@ int connectChat(struct Chatter* chatter, char* IP, char* port) {
         return ERR_OPENSOCKET;
     }
     // Step 2: Setup stream on socket and connect
-    struct timeval timeout;
-    timeout.tv_usec = 5;
-    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     ret = connect(sockfd, node->ai_addr, node->ai_addrlen);
     freeaddrinfo(node);
     if (ret == -1) {
