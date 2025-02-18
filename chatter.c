@@ -8,7 +8,6 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <errno.h>
-#include <unistd.h>
 #include <pthread.h>
 #include <netinet/tcp.h>
 #include <time.h>
@@ -31,8 +30,35 @@ struct ReceiveData {
     struct Chat* chat;
 };
 
-struct Chat* initChat(int sockfd) {
-    debug_print("initChat called\n");
+struct Chatter* _init_chatter() {
+    debug_print("_init_chatter called\n");
+    // Dynamically allocate all objects that need allocating
+    struct Chatter* chatter = (struct Chatter*)malloc(sizeof(struct Chatter));
+    chatter->gui = _init_GUI();
+    strcpy(chatter->myname, "Anonymous");
+    chatter->chats = LinkedList_init();
+    chatter->visibleChat = NULL;
+    pthread_mutex_init(&chatter->lock, NULL);
+    return chatter;
+}
+
+void _free_chatter(struct Chatter* chatter) {
+    debug_print("_free_chatter called\n");
+
+    _free_GUI(chatter->gui);
+    struct LinkedNode* chatNode = chatter->chats->head;
+    while (chatNode != NULL) {
+        struct Chat* chat = (struct Chat*)chatNode->data;
+        _free_chat(chat);
+        chatNode = chatNode->next;
+    }
+    LinkedList_free(chatter->chats);
+    pthread_mutex_destroy(&chatter->lock);
+    free(chatter);
+}
+
+struct Chat* _init_chat(int sockfd) {
+    debug_print("_init_chat called\n");
     struct Chat* chat = (struct Chat*)malloc(sizeof(struct Chat));
     chat->messagesIn = LinkedList_init();
     chat->messagesOut = LinkedList_init();
@@ -41,17 +67,15 @@ struct Chat* initChat(int sockfd) {
     return chat;
 }
 
-void destroyChat(struct Chat* chat) {
-    debug_print("destroyChat called\n");
-    freeMessages(chat->messagesIn);
-    LinkedList_free(chat->messagesIn);
-    freeMessages(chat->messagesOut);
-    LinkedList_free(chat->messagesOut);
+void _free_chat(struct Chat* chat) {
+    debug_print("_free_chat called\n");
+    _free_message_list(chat->messagesIn);
+    _free_message_list(chat->messagesOut);
     free(chat);
 }
 
-void freeMessages(struct LinkedList* messages) {
-    debug_print("freeMessages called\n");
+void _free_message_list(struct LinkedList* messages) {
+    debug_print("_free_message_list called\n");
     struct LinkedNode* node = messages->head;
     while (node != NULL) {
         struct Message* message = (struct Message*)node->data;
@@ -59,70 +83,7 @@ void freeMessages(struct LinkedList* messages) {
         free(message);
         node = node->next;
     }
-}
-
-struct Chatter* initChatter() {
-    debug_print("initChatter called\n");
-    // Dynamically allocate all objects that need allocating
-    struct Chatter* chatter = (struct Chatter*)malloc(sizeof(struct Chatter));
-    chatter->gui = initGUI();
-    strcpy(chatter->myname, "Anonymous");
-    chatter->chats = LinkedList_init();
-    chatter->visibleChat = NULL;
-    pthread_mutex_init(&chatter->lock, NULL);
-    /////////////////////////////////////////
-    // Refresh the GUI thread every so often
-    int res = pthread_create(&chatter->refreshGUIThread, NULL, refreshGUILoop, (void*)chatter);
-    if (res != 0) {
-        fprintf(stderr, "Error setting up refresh daemon for GUI\n");
-    }
-    /////////////////////////////////////////
-    return chatter;
-}
-
-void destroyChatter(struct Chatter* chatter) {
-    debug_print("destroyChatter called\n");
-
-    destroyGUI(chatter->gui);
-    struct LinkedNode* chatNode = chatter->chats->head;
-    while (chatNode != NULL) {
-        struct Chat* chat = (struct Chat*)chatNode->data;
-        destroyChat(chat);
-        chatNode = chatNode->next;
-    }
-    LinkedList_free(chatter->chats);
-    pthread_mutex_destroy(&chatter->lock);
-    free(chatter);
-}
-
-/**
- * @brief Get the first chat object in a list that corresponds
- * to a name
- * (NOTE: This could be done more efficiently with a hash table,
- * but we'll used linked lists for now)
- * 
- * @param name String name
- * @return struct Chat* 
- */
-struct Chat* getChatFromName(struct Chatter* chatter, char* name) {
-    debug_print("getChatFromName called\n");
-
-    struct Chat* chat = NULL;
-    pthread_mutex_lock(&chatter->lock);
-
-    struct LinkedNode* node = chatter->chats->head;
-    int len = strlen(name);
-    while (node != NULL) {
-        struct Chat* thisChat = (struct Chat*)node->data;
-        if (strncmp(name, chat->name, len) == 0) {
-            chat = thisChat;
-            break;
-        }
-        node = node->next;
-    }
-
-    pthread_mutex_unlock(&chatter->lock);
-    return chat;
+    LinkedList_free(messages);
 }
 
 int _send_loop(int sockfd,char *src,size_t len){
@@ -132,6 +93,7 @@ int _send_loop(int sockfd,char *src,size_t len){
     while (len > 0){
         sent_bytes = send(sockfd,src,len,0);
         if(sent_bytes == -1){
+            perror("send");
             status = FAILURE_GENERIC;
             break;
         }
@@ -161,15 +123,47 @@ int _recv_loop(int sockfd,char *dst,size_t len){
     return status;
 }
 
+
+/**
+ * @brief Get the first chat object in a list that corresponds
+ * to a name
+ * (NOTE: This could be done more efficiently with a hash table,
+ * but we'll used linked lists for now)
+ * 
+ * @param name String name
+ * @return struct Chat* 
+ */
+struct Chat* getChatFromName(struct Chatter* chatter, char* name) {
+    debug_print("getChatFromName called\n");
+
+    struct Chat* chat = NULL;
+    pthread_mutex_lock(&chatter->lock);
+
+    struct LinkedNode* node = chatter->chats->head;
+    int len = strlen(name);
+    while (node != NULL) {
+        struct Chat* thisChat = (struct Chat*)node->data;
+        if (strncmp(name, thisChat->name, len) == 0) {
+            chat = thisChat;
+            break;
+        }
+        node = node->next;
+    }
+
+    pthread_mutex_unlock(&chatter->lock);
+    return chat;
+}
+
+
 /**
  * @brief Remove a particular chat from the list
  * 
  * @param chatter Chatter object
  * @param chat Chat to remove
  */
-void removeChat(struct Chatter* chatter, struct Chat* chat) {
+void removeChat(struct Chatter *chatter, struct Chat *chat) {
     pthread_mutex_lock(&chatter->lock);
-    debug_print("REMOVE CHAT WAS CALLED!!!!\n");
+    debug_print("removeChat called\n");
     LinkedList_remove(chatter->chats, chat);
     if (chatter->visibleChat == chat) {
         // Bounce to another chat if there is one
@@ -178,7 +172,7 @@ void removeChat(struct Chatter* chatter, struct Chat* chat) {
             chatter->visibleChat = (struct Chat*)chatter->chats->head->data;
         }
     }
-    destroyChat(chat);
+    _free_chat(chat);
     pthread_mutex_unlock(&chatter->lock);
 }
 
@@ -256,7 +250,7 @@ void* receiveLoop(void* pargs) {
                 debug_print("DELETE NAME recvd\n");
                 
                 incoming_short = ntohs(msg_header.shortInt);
-                deleteMessageFromChat(chat,incoming_short);
+                _delete_message_from_list(chat->messagesIn,incoming_short);
                 break;
 
             case SEND_FILE:
@@ -329,6 +323,8 @@ void* receiveLoop(void* pargs) {
  * @param message 
  */
 int sendMessage(struct Chatter* chatter, char* message) {
+    debug_print("sendMessage called\n");
+
     int status = STATUS_SUCCESS;
     pthread_mutex_lock(&chatter->lock);
     
@@ -370,10 +366,12 @@ int sendMessage(struct Chatter* chatter, char* message) {
  * @param id ID of message to delete
  */
 int deleteMessage(struct Chatter* chatter, uint16_t id) {
+    debug_print("deleteMessage called\n");
+
     pthread_mutex_lock(&chatter->lock);
 
     // Locally remove the message
-    int status = deleteMessageFromChat(chatter->visibleChat,id);
+    int status = _delete_message_from_list(chatter->visibleChat->messagesOut,id);
 
     // Send to remove the message on the remote connection
     struct header_generic msg_header;
@@ -386,14 +384,15 @@ int deleteMessage(struct Chatter* chatter, uint16_t id) {
     return status;
 }
 
-int deleteMessageFromChat(struct Chat *chat, uint16_t id){
+int _delete_message_from_list(struct LinkedList *list, uint16_t id){
+    debug_print("_delete_message_from_list called\n");
     int status = FAILURE_GENERIC;
-    struct LinkedList *messagesOut = chat->messagesOut;
-    for(struct LinkedNode *node = messagesOut->head; node != NULL; node=node->next){
+    
+    for(struct LinkedNode *node = list->head; node != NULL; node=node->next){
         struct Message *message = (struct Message*)node->data;
         if(message->id == id){
             free(message->text);
-            LinkedList_remove(messagesOut,message);
+            LinkedList_remove(list,message);
             free(message);
             status = STATUS_SUCCESS;
             break;
@@ -409,10 +408,12 @@ int deleteMessageFromChat(struct Chat *chat, uint16_t id){
  * @param filename Path to file
  */
 int sendFile(struct Chatter* chatter, char* filename) {
+    debug_print("sendFile called\n");
+
     int status = STATUS_SUCCESS;
     if(ANNOUNCE_SENDING_FILE){
         char *announce_msg = malloc(strlen(filename)+1+17);
-        sprintf(announce_msg,"(Sending file '%s')",filename);
+        sprintf(announce_msg,"(Sending file \"%s\")",filename);
         sendMessage(chatter,announce_msg);
         free(announce_msg);
     }
@@ -479,21 +480,17 @@ int sendFile(struct Chatter* chatter, char* filename) {
  * @param chatter Data about the current chat session
  */
 int broadcastMyName(struct Chatter* chatter) {
+    debug_print("broadcastMyName called\n");
+
     int status = STATUS_SUCCESS;
     pthread_mutex_lock(&chatter->lock);
 
-    debug_print("Hello from broadcast myname!\n");
-    debug_print("Broadcast name, chatter*: %p\n",(void*)chatter);
-    
     size_t remaining_len = strlen(chatter->myname);
     struct header_generic msg_header;
     msg_header.magic = INDICATE_NAME;
     msg_header.shortInt = htons((uint16_t)remaining_len);
 
-    debug_print("Hello from after header creation!\n");
-
     for(struct LinkedNode *curr_node = chatter->chats->head; curr_node != NULL; curr_node = curr_node->next){
-        debug_print("Hello from inside the loop!\n");
         struct Chat *curr_chat = (struct Chat*)curr_node->data;
         if(send(curr_chat->sockfd,(char*)&msg_header,sizeof(struct header_generic),0) == -1){
             status = FAILURE_GENERIC;
@@ -514,7 +511,6 @@ int broadcastMyName(struct Chatter* chatter) {
     }
 
     pthread_mutex_unlock(&chatter->lock);
-    debug_print("Hello from after the unlock!\n");
     return status;
 }
 
@@ -531,13 +527,18 @@ int closeChat(struct Chatter* chatter, char* name) {
     
     struct Chat *selected_chat = getChatFromName(chatter,name);
 
-    struct header_generic msg_header;
-    msg_header.magic = END_CHAT;
-
-    if(send(selected_chat->sockfd,(char*)&msg_header,sizeof(struct header_generic),0) == -1){
-        status = FAILURE_GENERIC;
+    if(selected_chat != NULL){
+        struct header_generic msg_header;
+        msg_header.magic = END_CHAT;
+    
+        if(send(selected_chat->sockfd,(char*)&msg_header,sizeof(struct header_generic),0) == -1){
+            status = FAILURE_GENERIC;
+        }
+        removeChat(chatter,selected_chat);
     }
-    removeChat(chatter,selected_chat);
+    else{
+        status = CHAT_DOESNT_EXIST;
+    }
 
     return status;
 }
@@ -550,6 +551,8 @@ int closeChat(struct Chatter* chatter, char* name) {
  * @param name Switch chat to be with this person
  */
 int switchTo(struct Chatter* chatter, char* name) {
+    debug_print("switchTo called\n");
+    
     int status = STATUS_SUCCESS;
     struct Chat* chat = getChatFromName(chatter, name);
     pthread_mutex_lock(&chatter->lock);
@@ -581,7 +584,7 @@ void socketErrorAndExit(struct Chatter* chatter, char* fmt) {
     printErrorGUI(chatter->gui, error);
     free(error);
     sleep(5);
-    destroyChatter(chatter);
+    _free_chatter(chatter);
     exit(errno);
 }
 
@@ -594,16 +597,18 @@ void socketErrorAndExit(struct Chatter* chatter, char* fmt) {
  * @param sockfd A socket that's already been connected to a stream
  */
 int setupNewChat(struct Chatter* chatter, int sockfd) {
+    debug_print("setupNewChat called\n");
+
     // Step 0: Disable Nagle's algorithm on this socket
     int yes = 1;
     setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(int));
+    
     // Step 1: Setup a new chat object and add to the list
-    struct Chat* chat = initChat(sockfd);
+    struct Chat* chat = _init_chat(sockfd);
     strcpy(chat->name, "Anonymous");
     pthread_mutex_lock(&chatter->lock);
     LinkedList_addFirst(chatter->chats, (void*)chat);
-    debug_print("In setup new chat, chat list head: %p\n",(void*)chatter->chats->head);
-    debug_print("In setup new chat, sockfd: %d\n",sockfd);
+    
     // Step 2: Start a thread for a loop that receives data
     struct ReceiveData* param = (struct ReceiveData*)malloc(sizeof(struct ReceiveData));
     param->chat = chat;
@@ -628,11 +633,9 @@ int setupNewChat(struct Chatter* chatter, int sockfd) {
     }
     pthread_mutex_unlock(&chatter->lock);
     if (status != STATUS_SUCCESS) {
-        debug_print("ISSUE OCCURRED IN SETUP, DESTROYING CHAT!!");
-        destroyChat(chat);
+        _free_chat(chat);
     }
-    debug_print("Setup new chat about to return, chat list head: %p\n",(void*)chatter->chats->head);
-    debug_print("Setup new chat, chatter*: %p\n",(void*)chatter);
+    
     return status;
 }
 
@@ -645,6 +648,8 @@ int setupNewChat(struct Chatter* chatter, int sockfd) {
  * @param port Port on which to establish connection
  */
 int connectChat(struct Chatter* chatter, char* IP, char* port) {
+    debug_print("connectChat called\n");
+    
     // Step 1: Get address information for a host
     struct addrinfo hints;
     struct addrinfo* node;
@@ -684,7 +689,7 @@ int connectChat(struct Chatter* chatter, char* IP, char* port) {
         return ERR_OPENSOCKET;
     }
     ret = setupNewChat(chatter, sockfd);
-    debug_print("in connectChat before return... chats*: %p, chats head: %p\n",(void*)chatter->chats,(void*)chatter->chats->head);
+    
     return ret;
 }
 
@@ -722,7 +727,7 @@ int main(int argc, char *argv[]) {
         port = argv[1];
     }
     // Step 1: Initialize chatter object and setup server to listen for incoming connections
-    struct Chatter* chatter = initChatter();
+    struct Chatter* chatter = _init_chatter();
     struct GUI* gui = chatter->gui;
     // Step 1a: Parse Parameters and initialize variables
     struct addrinfo hints;
@@ -763,7 +768,7 @@ int main(int argc, char *argv[]) {
     int res = pthread_create(&serverThread, NULL, serverLoop, (void*)chatter);
     if (res != 0) {
         socketErrorAndExit(chatter, "Error number %i creating server thread\n");
-        destroyChatter(chatter);
+        _free_chatter(chatter);
         exit(res);
     }
 
@@ -772,5 +777,5 @@ int main(int argc, char *argv[]) {
     // TODO: Cleanup server thread
 
     // Step 3: Clean everything up when it's over
-    destroyChatter(chatter);
+    _free_chatter(chatter);
 }

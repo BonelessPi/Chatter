@@ -11,6 +11,7 @@
 #define debug_print(fmt, ...) \
             do { if (DEBUG) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
 
+
 enum ChatStatusCodes {
     STATUS_SUCCESS = 0,
     FAILURE_GENERIC = 1,
@@ -47,16 +48,12 @@ struct GUI {
     WINDOW* nameWindow;
     pthread_mutex_t nameWindowLock;
 };
-struct GUI* initGUI();
-void destroyGUI(struct GUI* gui);
-void printErrorGUI(struct GUI* gui, char* error);
 
 struct Message {
     uint16_t id;
     time_t timestamp; // Time at which this message was added to the data structure
     char* text;
 };
-void freeMessages(struct LinkedList* messages);
 
 struct Chat {
     char name[65536]; // Name of the person we're talking to
@@ -65,9 +62,6 @@ struct Chat {
     struct LinkedList* messagesIn;
     struct LinkedList* messagesOut;
 };
-struct Chat* initChat(int sockfd);
-void destroyChat(struct Chat* chat);
-void* refreshGUILoop(void* args);
 
 struct Chatter {
     struct GUI* gui;
@@ -76,29 +70,43 @@ struct Chatter {
     struct Chat* visibleChat; // Linked node for the visible chat
     int serversock; // File descriptor for the socket listening for incoming connections
     pthread_mutex_t lock;
-    pthread_t refreshGUIThread;
 };
-struct Chatter* initChatter();
-void destroyChatter(struct Chatter* chatter);
-struct Chat* getChatFromName(struct Chatter* chatter, char* name);
+
+
+// GUI functions
+
+struct GUI* _init_GUI();
+void _free_GUI(struct GUI* gui);
+void printErrorGUI(struct GUI* gui, char* error);
 
 void reprintUsernameWindow(struct Chatter* chatter); // NOTE: This method locks chat
+void printLineToChat(struct GUI* gui, char* str, int len, int* row);
 void reprintChatWindow(struct Chatter* chatter); // NOTE: This method locks chat
+
+int parseInput(struct Chatter* chatter, char* input);
 void typeLoop(struct Chatter* chatter);
 
+// Chatter base functions
 
-////////////////////////////////////////////////////////////////////
-//                    OUTGOING ACTIONS                            //
-////////////////////////////////////////////////////////////////////
+struct Chatter* _init_chatter();
+void _free_chatter(struct Chatter* chatter);
+struct Chat* _init_chat(int sockfd);
+void _free_chat(struct Chat* chat);
+void _free_message_list(struct LinkedList* messages);
 
-/**
- * @brief Establish a chat with an IP address
- * 
- * @param chatter Data about the current chat session
- * @param IP IP address in human readable form
- * @param port Port on which to establish connection
- */
-int connectChat(struct Chatter* chatter, char* IP, char* port);
+int _send_loop(int sockfd,char *src,size_t len);
+int _recv_loop(int sockfd,char *dst,size_t len);
+
+// Helper functions
+
+struct Chat* getChatFromName(struct Chatter* chatter, char* name);
+void removeChat(struct Chatter *chatter, struct Chat *chat);
+
+// Receiving task
+
+void* receiveLoop(void *pargs);
+
+// Action functions
 
 /**
  * @brief Send a message in the visible chat
@@ -116,7 +124,7 @@ int sendMessage(struct Chatter* chatter, char* message);
  */
 int deleteMessage(struct Chatter* chatter, uint16_t id);
 
-int deleteMessageFromChat(struct Chat *chat, uint16_t id);
+int _delete_message_from_list(struct LinkedList *list, uint16_t id);
 
 /**
  * @brief Send a file in the visible chat
@@ -150,10 +158,23 @@ int closeChat(struct Chatter* chatter, char* name);
  */
 int switchTo(struct Chatter* chatter, char* name);
 
+// Connection Management
 
-////////////////////////////////////////////////////////////////////
-//                    INCOMING ACTIONS                            //
-////////////////////////////////////////////////////////////////////
+void socketErrorAndExit(struct Chatter* chatter, char* fmt);
+int setupNewChat(struct Chatter* chatter, int sockfd);
+
+/**
+ * @brief Establish a chat with an IP address
+ * 
+ * @param chatter Data about the current chat session
+ * @param IP IP address in human readable form
+ * @param port Port on which to establish connection
+ */
+int connectChat(struct Chatter* chatter, char* IP, char* port);
+
+// Task for server function
+
+void* serverLoop(void* pargs);
 
 
 #endif

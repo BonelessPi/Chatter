@@ -2,14 +2,10 @@
 #include <stdlib.h>
 #include "linkedlist.h"
 
-#define DEBUG 1
-#define debug_print(fmt, ...) \
-            do { if (DEBUG) fprintf(stderr, fmt, ##__VA_ARGS__); } while (0)
 
 struct LinkedList* LinkedList_init() {
     struct LinkedList* list = (struct LinkedList*)malloc(sizeof(struct LinkedList));
     list->head = NULL;
-    debug_print("linked list init: %p\n",(void*)list);
     return list;
 }
 
@@ -22,7 +18,6 @@ void LinkedList_free(struct LinkedList* list) {
         node = nextNode;
     }
     // Step 2: Free list
-    debug_print("linked list free: %p\n",(void*)list);
     free(list);
 }
 
@@ -31,7 +26,6 @@ void LinkedList_addFirst(struct LinkedList* list, void* data) {
     newHead->next = list->head;
     newHead->data = data;
     list->head = newHead;
-    debug_print("linked list add first: %p\n",(void*)list);
 }
 
 void* LinkedList_removeFirst(struct LinkedList* list) {
@@ -43,7 +37,6 @@ void* LinkedList_removeFirst(struct LinkedList* list) {
         free(tmp);
     }
     return ret;
-    debug_print("linked list remove first: %p\n",(void*)list);
 }
 
 void* LinkedList_remove(struct LinkedList* list, void* data) {
@@ -68,7 +61,6 @@ void* LinkedList_remove(struct LinkedList* list, void* data) {
             }
         }
     }
-    debug_print("linked list remove: %p\n",(void*)list);
     return ret;
 }
 

@@ -14,7 +14,7 @@
 #define ADDR_WIDTH 10
 char NULLTERM = '\0';
 
-struct GUI* initGUI() {
+struct GUI* _init_GUI() {
     // Setup 3 windows
     initscr();
     noecho();
@@ -38,7 +38,7 @@ struct GUI* initGUI() {
     return gui;
 }
 
-void destroyGUI(struct GUI* gui) {
+void _free_GUI(struct GUI* gui) {
     delwin(gui->chatWindow);
     pthread_mutex_destroy(&gui->chatWindowLock);
     delwin(gui->inputWindow);
@@ -146,14 +146,6 @@ void reprintChatWindow(struct Chatter* chatter) {
     pthread_mutex_unlock(&chatter->lock);
 }
 
-void* refreshGUILoop(void* args) {
-    struct Chatter* chatter = (struct Chatter*)args;
-    while (1) {
-        sleep(5);
-        reprintUsernameWindow(chatter);
-        reprintChatWindow(chatter);
-    }
-}
 
 ///////////////////////////////////////////////////////////
 //            Typing / Parsing Methods
@@ -223,7 +215,7 @@ int parseInput(struct Chatter* chatter, char* input) {
         finishedStatus = READY_TO_EXIT;
     }
     else {
-        char* fmt = "Unrecognized command %s;  (use connect, myname, send, sendfile, delete, close, talkto, exit)";
+        char* fmt = "Unrecognized command \"%s\";  (use connect, myname, send, sendfile, delete, close, talkto, exit)";
         char command[65536];
         sscanf(input, "%65535s", command);
         char* error = (char*)malloc(strlen(fmt) + strlen(command) + 1);
