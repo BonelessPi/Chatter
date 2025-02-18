@@ -142,6 +142,8 @@ int sendFile(struct Chatter* chatter, char* filename);
  */
 int broadcastMyName(struct Chatter* chatter);
 
+int _declare_name_to_chat(struct Chat *chat, char *name, size_t len);
+
 /**
  * @brief Close chat with someone
  * 

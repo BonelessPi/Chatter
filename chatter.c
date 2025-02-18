@@ -485,34 +485,33 @@ int broadcastMyName(struct Chatter* chatter) {
     int status = STATUS_SUCCESS;
     pthread_mutex_lock(&chatter->lock);
 
-    size_t remaining_len = strlen(chatter->myname);
-    struct header_generic msg_header;
-    msg_header.magic = INDICATE_NAME;
-    msg_header.shortInt = htons((uint16_t)remaining_len);
+    size_t name_len = strlen(chatter->myname);
+    char *name_copy = malloc(name_len*sizeof(char)+1);
+    strcpy(name_copy,chatter->myname);
 
-    for(struct LinkedNode *curr_node = chatter->chats->head; curr_node != NULL; curr_node = curr_node->next){
-        struct Chat *curr_chat = (struct Chat*)curr_node->data;
-        if(send(curr_chat->sockfd,(char*)&msg_header,sizeof(struct header_generic),0) == -1){
-            status = FAILURE_GENERIC;
-        }
-        else{
-            char *message = chatter->myname;
-            ssize_t sent_bytes;
-            while (remaining_len > 0){
-                sent_bytes = send(curr_chat->sockfd,message,remaining_len,0);
-                if(sent_bytes == -1){
-                    status = FAILURE_GENERIC;
-                    break;
-                }
-                message += sent_bytes;
-                remaining_len -= sent_bytes;
-            }
-        }
+    for(struct LinkedNode *node = chatter->chats->head; node != NULL; node = node->next){
+        struct Chat *chat = (struct Chat*)node->data;
+        status = status || _declare_name_to_chat(chat,name_copy,name_len);
     }
 
+    free(name_copy);
     pthread_mutex_unlock(&chatter->lock);
     return status;
 }
+
+int _declare_name_to_chat(struct Chat *chat, char *name, size_t len){
+    struct header_generic msg_header;
+    msg_header.magic = INDICATE_NAME;
+    msg_header.shortInt = htons((uint16_t)len);
+
+    int status = _send_loop(chat->sockfd,(char*)&msg_header,sizeof(struct header_generic));
+    if(status == STATUS_SUCCESS){
+        status = _send_loop(chat->sockfd,name,len);
+    }
+
+    return status;
+}
+
 
 /**
  * @brief Close chat with someone
@@ -531,9 +530,8 @@ int closeChat(struct Chatter* chatter, char* name) {
         struct header_generic msg_header;
         msg_header.magic = END_CHAT;
     
-        if(send(selected_chat->sockfd,(char*)&msg_header,sizeof(struct header_generic),0) == -1){
-            status = FAILURE_GENERIC;
-        }
+        status = _send_loop(selected_chat->sockfd,(char*)&msg_header,sizeof(struct header_generic));
+        
         removeChat(chatter,selected_chat);
     }
     else{
@@ -608,6 +606,7 @@ int setupNewChat(struct Chatter* chatter, int sockfd) {
     strcpy(chat->name, "Anonymous");
     pthread_mutex_lock(&chatter->lock);
     LinkedList_addFirst(chatter->chats, (void*)chat);
+    _declare_name_to_chat(chat,chatter->myname,strlen(chatter->myname));
     
     // Step 2: Start a thread for a loop that receives data
     struct ReceiveData* param = (struct ReceiveData*)malloc(sizeof(struct ReceiveData));
