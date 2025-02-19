@@ -25,29 +25,25 @@ struct GUI* _init_GUI() {
     gui->CW = gui->W - ADDR_WIDTH;
     curs_set(TRUE);
     gui->chatWindow = newwin(gui->CH, gui->CW, 0, 0);
-    pthread_mutex_init(&gui->chatWindowLock, NULL);
     gui->inputWindow = newwin(TYPE_SIZE, gui->W, gui->CH, 0);
     gui->nameWindow  = newwin(gui->CH, ADDR_WIDTH, 0, gui->CW);
-    pthread_mutex_init(&gui->nameWindowLock, NULL);
 
     char* s = "Hello!  Chats will go here!";
     mvwprintw(gui->chatWindow, 0, 0, "%s", s); 
-    wrefresh(gui->chatWindow);
     mvwprintw(gui->nameWindow, 0, 0, "Usernames\nGo\nHere!"); 
-    wrefresh(gui->nameWindow);
+    wnoutrefresh(gui->chatWindow);
+    wnoutrefresh(gui->nameWindow);
+    doupdate();
     return gui;
 }
 
 void _free_GUI(struct GUI* gui) {
     delwin(gui->chatWindow);
-    pthread_mutex_destroy(&gui->chatWindowLock);
     delwin(gui->inputWindow);
     delwin(gui->nameWindow);
-    pthread_mutex_destroy(&gui->nameWindowLock);
     endwin();
     free(gui);
 }
-
 
 
 ///////////////////////////////////////////////////////////
@@ -56,18 +52,17 @@ void _free_GUI(struct GUI* gui) {
 ///////////////////////////////////////////////////////////
 
 void printErrorGUI(struct GUI* gui, char* error) {
-    pthread_mutex_lock(&gui->chatWindowLock);
     wclear(gui->chatWindow);
     mvwprintw(gui->chatWindow, 0, 0, "%s", error);
     wrefresh(gui->chatWindow);
-    pthread_mutex_unlock(&gui->chatWindowLock);
 }
 
 void reprintUsernameWindow(struct Chatter* chatter) {
     struct GUI* gui = chatter->gui;
     pthread_mutex_lock(&chatter->lock);
-    pthread_mutex_lock(&gui->nameWindowLock);
     wclear(gui->nameWindow);
+    box(gui->nameWindow,0,0);
+    mvwprintw(gui->nameWindow,0,1,"Names");
     struct LinkedNode* node = chatter->chats->head;
     int row = 0;
     while (node != NULL && row < gui->CH) {
@@ -79,7 +74,6 @@ void reprintUsernameWindow(struct Chatter* chatter) {
         node = node->next;
     }
     wrefresh(gui->nameWindow);
-    pthread_mutex_unlock(&gui->nameWindowLock);
     pthread_mutex_unlock(&chatter->lock);
 }
 
@@ -98,8 +92,9 @@ void printLineToChat(struct GUI* gui, char* str, int len, int* row) {
 void reprintChatWindow(struct Chatter* chatter) {
     struct GUI* gui = chatter->gui;
     pthread_mutex_lock(&chatter->lock);
-    pthread_mutex_lock(&gui->chatWindowLock);
     wclear(gui->chatWindow);
+    box(gui->chatWindow,0,0);
+    mvwprintw(gui->chatWindow,0,1,"Chat");
     if (chatter->visibleChat != NULL) {
         struct Chat* chat = chatter->visibleChat;
         // Print out chats in order of most recent
@@ -140,7 +135,6 @@ void reprintChatWindow(struct Chatter* chatter) {
         }
     }
     wrefresh(gui->chatWindow);
-    pthread_mutex_unlock(&gui->chatWindowLock);
     pthread_mutex_unlock(&chatter->lock);
 }
 
@@ -244,7 +238,10 @@ void typeLoop(struct Chatter* chatter) {
         int ch = 0;
         do {
             ch = wgetch(gui->inputWindow);
-            if (ch == KEY_UP) {
+            if (ch == KEY_RESIZE) {
+                // TODO resize
+            }
+            else if (ch == KEY_UP) {
                 // TODO: Scroll up in current conversation
             }
             else if (ch == KEY_DOWN) {

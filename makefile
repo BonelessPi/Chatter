@@ -25,7 +25,7 @@ simpleserver: simpleserver.c
 	$(CC) $(CFLAGS) -o simpleserver simpleserver.c -lpthread
 
 test: test.c
-	$(CC) $(CFLAGS) -o test test.c
+	$(CC) $(CFLAGS) -o test test.c -lncurses -lpthread
 
 hashmaptest: hashmaptest.c hashmap.o
 	gcc -g -o hashmaptest hashmaptest.c hashmap.o

@@ -1,14 +1,28 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <ncurses.h>
+#include <unistd.h>
 
 int main() {
-    // TODO: This is a dummy file for testing C syntax ideas 
-    char* input = "send This is a message";
-    if (strncmp(input, "send", strlen("send")) == 0) {
-        char* message = input + strlen("send") + 1;
-        printf("Sending message %s", message);
-
+    initscr();
+    
+    int key;
+    while ((key = getch()) != 27) {
+        if (key == KEY_RESIZE) {
+            clear();
+            if(COLS < 60 || LINES < 10){
+                mvprintw(0, 0, "TERM TOO SMALL!!");
+            }
+            else{
+                mvprintw(0, 0, "COLS = %d, LINES = %d", COLS, LINES);
+            }
+            for (int i = 0; i < COLS; i++)
+                mvaddch(1, i, '*');
+            refresh();
+        }
     }
 
+    endwin();
+    return 0;
 }
