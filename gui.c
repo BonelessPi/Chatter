@@ -25,10 +25,10 @@ struct GUI* _init_GUI() {
     gui->CW = gui->W - ADDR_WIDTH;
     curs_set(TRUE);
     gui->chatWindow = newwin(gui->CH, gui->CW, 0, 0);
-    //pthread_mutex_init(&gui->chatWindowLock, NULL);
+    pthread_mutex_init(&gui->chatWindowLock, NULL);
     gui->inputWindow = newwin(TYPE_SIZE, gui->W, gui->CH, 0);
     gui->nameWindow  = newwin(gui->CH, ADDR_WIDTH, 0, gui->CW);
-    //pthread_mutex_init(&gui->nameWindowLock, NULL);
+    pthread_mutex_init(&gui->nameWindowLock, NULL);
 
     char* s = "Hello!  Chats will go here!";
     mvwprintw(gui->chatWindow, 0, 0, "%s", s); 
@@ -56,32 +56,30 @@ void _free_GUI(struct GUI* gui) {
 ///////////////////////////////////////////////////////////
 
 void printErrorGUI(struct GUI* gui, char* error) {
-    //pthread_mutex_lock(&gui->chatWindowLock);
+    pthread_mutex_lock(&gui->chatWindowLock);
     wclear(gui->chatWindow);
     mvwprintw(gui->chatWindow, 0, 0, "%s", error);
     wrefresh(gui->chatWindow);
-    //pthread_mutex_unlock(&gui->chatWindowLock);
+    pthread_mutex_unlock(&gui->chatWindowLock);
 }
 
 void reprintUsernameWindow(struct Chatter* chatter) {
     struct GUI* gui = chatter->gui;
     pthread_mutex_lock(&chatter->lock);
-    //pthread_mutex_lock(&gui->nameWindowLock);
+    pthread_mutex_lock(&gui->nameWindowLock);
     wclear(gui->nameWindow);
     struct LinkedNode* node = chatter->chats->head;
     int row = 0;
     while (node != NULL && row < gui->CH) {
         struct Chat* chat = (struct Chat*)node->data;
-        char special = ' ';
-        if (chat == chatter->visibleChat) {
-            special = '*'; // Put an asterix next to the active chat
-        }
+        // Put an asterix next to the active chat
+        char special = chat==chatter->visibleChat ? '*' : ' ';
         mvwprintw(gui->nameWindow, row, 0, "%s%c", chat->name, special);
         row++;
         node = node->next;
     }
     wrefresh(gui->nameWindow);
-    //pthread_mutex_unlock(&gui->nameWindowLock);
+    pthread_mutex_unlock(&gui->nameWindowLock);
     pthread_mutex_unlock(&chatter->lock);
 }
 
@@ -100,7 +98,7 @@ void printLineToChat(struct GUI* gui, char* str, int len, int* row) {
 void reprintChatWindow(struct Chatter* chatter) {
     struct GUI* gui = chatter->gui;
     pthread_mutex_lock(&chatter->lock);
-    //pthread_mutex_lock(&gui->chatWindowLock);
+    pthread_mutex_lock(&gui->chatWindowLock);
     wclear(gui->chatWindow);
     if (chatter->visibleChat != NULL) {
         struct Chat* chat = chatter->visibleChat;
@@ -142,7 +140,7 @@ void reprintChatWindow(struct Chatter* chatter) {
         }
     }
     wrefresh(gui->chatWindow);
-    //pthread_mutex_unlock(&gui->chatWindowLock);
+    pthread_mutex_unlock(&gui->chatWindowLock);
     pthread_mutex_unlock(&chatter->lock);
 }
 
@@ -167,7 +165,7 @@ int parseInput(struct Chatter* chatter, char* input) {
     if (strncmp(input, "connect", strlen("connect")) == 0) {
         // Connect and start a conversation with a particular IP address
         char IP[40];
-        char port[6];
+        char port[6] = {'6','0','0','0','0','\0'};
         sscanf(input, "connect %39s %5s", IP, port);
         if (strstr(IP, ".") == NULL) {
             status = IP_FORMAT_ERROR;
@@ -185,6 +183,7 @@ int parseInput(struct Chatter* chatter, char* input) {
     else if (strncmp(input, "sendfile", strlen("sendfile")) == 0) {
         // Send the following file message in the visible conversation
         char filename[65536];
+        *filename = '\0';
         sscanf(input, "sendfile %65535s", filename);
         status = sendFile(chatter, filename);
     }
@@ -196,30 +195,31 @@ int parseInput(struct Chatter* chatter, char* input) {
     else if (strncmp(input, "talkto", strlen("talkto")) == 0) {
         // Switch the visible chat window to someone else
         char name[65536];
+        *name = '\0';
         sscanf(input, "talkto %65535s", name);
         status = switchTo(chatter, name);
     }
     else if (strncmp(input, "delete", strlen("delete")) == 0) {
         // Delete the message with this id in the visible conversation
-        uint16_t id;
-        sscanf(input, "delete %hu", &id);
-        status = deleteMessage(chatter, id);
+        uint16_t id = 0xffff;
+        if(sscanf(input, "delete %hu", &id) == 1){
+            status = deleteMessage(chatter, id);
+        }
     }
     else if (strncmp(input, "close", strlen("close")) == 0) {
         // Close the connection with someone
         char name[65536];
-        sscanf(input, "close %65535s", name);
-        status = closeChat(chatter, name);
+        if(sscanf(input, "close %65535s", name) == 1){
+            status = closeChat(chatter, name);
+        }
     }
     else if (strncmp(input, "exit", strlen("exit")) == 0) {
         finishedStatus = READY_TO_EXIT;
     }
     else {
         char* fmt = "Unrecognized command \"%s\";  (use connect, myname, send, sendfile, delete, close, talkto, exit)";
-        char command[65536];
-        sscanf(input, "%65535s", command);
-        char* error = (char*)malloc(strlen(fmt) + strlen(command) + 1);
-        sprintf(error, fmt, command);
+        char* error = (char*)malloc(strlen(fmt) + strlen(input) + 1);
+        sprintf(error, fmt, input);
         printErrorGUI(gui, error);
         free(error);
         return finishedStatus;

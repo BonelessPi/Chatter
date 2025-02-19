@@ -172,6 +172,7 @@ void removeChat(struct Chatter *chatter, struct Chat *chat) {
             chatter->visibleChat = (struct Chat*)chatter->chats->head->data;
         }
     }
+    close(chat->sockfd);
     _free_chat(chat);
     pthread_mutex_unlock(&chatter->lock);
 }
@@ -193,7 +194,7 @@ void* receiveLoop(void* pargs) {
     struct Chatter* chatter = param->chatter;
     free(param);
 
-    int continue_server_loop = 1, status = STATUS_SUCCESS, res;
+    int continue_receive_loop = 1, status = STATUS_SUCCESS, res;
     char *msg_text, *filename, buf[1024];
     struct Message *msg_obj;
     uint16_t incoming_short;
@@ -201,7 +202,7 @@ void* receiveLoop(void* pargs) {
     size_t bytes_written;
     FILE *file;
 
-    while(continue_server_loop){
+    while(continue_receive_loop){
         // Loop until the connection closes
         struct header_generic msg_header;
         
@@ -212,6 +213,7 @@ void* receiveLoop(void* pargs) {
         }
 
         // Be sure to lock variables as appropriate for thread safety
+        pthread_mutex_lock(&chatter->lock);
         switch(msg_header.magic){
             case INDICATE_NAME:
                 debug_print("NAME recvd\n");
@@ -222,7 +224,7 @@ void* receiveLoop(void* pargs) {
                 chat->name[incoming_short] = '\0';
 
                 if(status != STATUS_SUCCESS){
-                    continue_server_loop = 0;
+                    continue_receive_loop = 0;
                 }
                 break;
 
@@ -237,7 +239,7 @@ void* receiveLoop(void* pargs) {
                 status = _recv_loop(chat->sockfd,msg_text,incoming_long);
                 msg_text[incoming_long] = '\0';
                 if(status != STATUS_SUCCESS){
-                    continue_server_loop = 0;
+                    continue_receive_loop = 0;
                 }
 
                 msg_obj->id = incoming_short;
@@ -263,24 +265,24 @@ void* receiveLoop(void* pargs) {
                 status = _recv_loop(chat->sockfd,filename,incoming_short);
                 filename[incoming_short] = '\0';
                 if(status != STATUS_SUCCESS){
-                    continue_server_loop = 0;
+                    continue_receive_loop = 0;
                 }
 
                 file = fopen(filename,"rb");
                 free(filename);
                 if(file == NULL){
-                    continue_server_loop = 0;
+                    continue_receive_loop = 0;
                 }
                 else{
                     while(incoming_long > 0){
                         res = recv(chat->sockfd,buf,incoming_long<1024 ? incoming_long : 1024,0);
                         if (res <= 0) {
-                            continue_server_loop = 0;
+                            continue_receive_loop = 0;
                             break;
                         }
                         bytes_written = fwrite(buf,sizeof(char),res,file);
                         if (bytes_written < res) {
-                            continue_server_loop = 0;
+                            continue_receive_loop = 0;
                             break;
                         }
                         incoming_long -= res;
@@ -293,18 +295,19 @@ void* receiveLoop(void* pargs) {
             case END_CHAT:
                 debug_print("END CHAT recvd\n");
 
-                removeChat(chatter,chat);
+                continue_receive_loop = 0;
                 break;
 
             default:
                 debug_print("Unknown magic number %d received",msg_header.magic);
                 break;
         }
+        pthread_mutex_unlock(&chatter->lock);
         reprintUsernameWindow(chatter);
         reprintChatWindow(chatter);
     }
     debug_print("ENDING RECEIVE LOOP!\n");
-    removeChat(chatter, chat);
+    //removeChat(chatter, chat);
     pthread_exit(NULL); // Clean up thread
     return NULL;
 }
@@ -377,6 +380,7 @@ int deleteMessage(struct Chatter* chatter, uint16_t id) {
     struct header_generic msg_header;
     msg_header.magic = DELETE_MESSAGE;
     msg_header.shortInt = htons(id);
+    msg_header.longInt = 0;
 
     status = _send_loop(chatter->visibleChat->sockfd,(char*)&msg_header,sizeof(struct header_generic));
 
@@ -503,6 +507,7 @@ int _declare_name_to_chat(struct Chat *chat, char *name, size_t len){
     struct header_generic msg_header;
     msg_header.magic = INDICATE_NAME;
     msg_header.shortInt = htons((uint16_t)len);
+    msg_header.longInt = 0;
 
     int status = _send_loop(chat->sockfd,(char*)&msg_header,sizeof(struct header_generic));
     if(status == STATUS_SUCCESS){
@@ -527,12 +532,14 @@ int closeChat(struct Chatter* chatter, char* name) {
     struct Chat *selected_chat = getChatFromName(chatter,name);
 
     if(selected_chat != NULL){
+        removeChat(chatter,selected_chat);
+
         struct header_generic msg_header;
         msg_header.magic = END_CHAT;
+        msg_header.shortInt = 0;
+        msg_header.longInt = 0;
     
         status = _send_loop(selected_chat->sockfd,(char*)&msg_header,sizeof(struct header_generic));
-        
-        removeChat(chatter,selected_chat);
     }
     else{
         status = CHAT_DOESNT_EXIST;
@@ -698,7 +705,7 @@ int connectChat(struct Chatter* chatter, char* IP, char* port) {
  * @param pargs Pointer to the chatter data
  */
 void* serverLoop(void* pargs) {
-    struct Chatter* chatter = (struct Chatter*)pargs;
+    struct Chatter *chatter = (struct Chatter*)pargs;
     while (1) { // TODO: Finish terminating thread when appropriate
         struct sockaddr_storage their_addr;
         socklen_t len = sizeof(their_addr);
